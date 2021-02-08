@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+  </head>
+  <style>
+    html,
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+        Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+      padding: 0px;
+      margin: 0px;
+    }
+
+    input {
+      margin: 4px 0px;
+    }
+
+    textarea {
+      padding: 8px;
+      border: 0px;
+    }
+
+    #app {
+      margin: auto;
+      padding: 32px;
+      width: 50%;
+    }
+
+    .gcode {
+      width: 50vw;
+      min-width: 600px;
+      height: 30vh;
+      background-color: rgb(235, 235, 235);
+      font-family: "Courier New", Courier, monospace;
+      /* font-weight: 700; */
+    }
+
+    .tooltip {
+      position: relative;
+      display: inline-block;
+    }
+
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 120px;
+      background-color: #555;
+      color: #fff;
+      text-align: center;
+      border-radius: 6px;
+      padding: 5px 0;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -60px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .tooltip .tooltiptext::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: #555 transparent transparent transparent;
+    }
+
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
+    }
+  </style>
+  <body>
+    <div id="app">
+      <h1>Arc Breaker – Convert G2/G3 to G1 move commands</h1>
+      <div>
+        <input type="file" id="inputFile" accept=".cnc, .g, .gcode" />
+        <div class="tooltip">
+          <input
+            id="segmentLength"
+            type="number"
+            placeholder="seg-len in mm"
+            value="1"
+            min="0.0001"
+          />
+          <span class="tooltiptext"
+            >Max. length of linear segment forming the arc (mm)</span
+          >
+        </div>
+
+        <div class="tooltip">
+          <input
+            id="segmentAngle"
+            type="number"
+            placeholder="angle in degree"
+            value="5"
+            min="0.0001"
+          />
+          <span class="tooltiptext"
+            >Max. angle between to linear segments forming the arc
+            (degree)</span
+          >
+        </div>
+      </div>
+      <h4>Input with G2/G3</h4>
+      <textarea
+        id="gcodeIn"
+        class="gcode"
+        type="text"
+        placeholder="Put your GCode here"
+      ></textarea>
+      <h4>Output without G2/G3</h4>
+      <textarea
+        id="gcodeOut"
+        class="gcode"
+        type="text"
+        placeholder="Output"
+      ></textarea>
+
+      <a id="download">Download output</a>
+    </div>
+
+    <script>
+      let posX = 0;
+      let posY = 0;
+      let posZ = 0;
+
+      window.onload = () => {
+        const inGcode = document.querySelector("#gcodeIn");
+        const outGcode = document.querySelector("#gcodeOut");
+        const segmentLength = document.querySelector("#segmentLength");
+        const segmentAngle = document.querySelector("#segmentAngle");
+
+        //init with example GCode
+        // inGcode.value =
+        //   "G0 Z15.000 \nG0 X8.837 Y8.837 \nG0 Z13.000 \nG1 X8.837 Y8.837 Z5.000 \nG2 X2.278 Y-12.289 Z5.000 I-8.837 J-8.837 \nG2 X-12.289 Y-2.278 Z5.000 I-2.278 J12.289 \nG2 X-2.278 Y12.289 Z5.000 I12.289 J2.278 \nG2 X8.837 Y8.837 Z5.000 I2.278 J-12.289 \nG1 X8.837 Y8.837 Z0.000 \nG2 X2.278 Y-12.289 Z0.000 I-8.837 J-8.837 \nG2 X-12.289 Y-2.278 Z0.000 I-2.278 J12.289 \nG2 X-2.278 Y12.289 Z0.000 I12.289 J2.278 \nG2 X8.837 Y8.837 Z0.000 I2.278 J-12.289 \nG0 Z15.000 \nG0 Z15.000 \n(finish operation: Profile)\n(begin postamble)\nM05\nG17 G54 G90 G80 G40\nM2";
+
+        inGcode.value =
+          "G17 G54 G40 G49 G80 G90\nG21\nG54\nM5\nM6 T1\nG43 H1\nM3 S0\nG0 Z10\nG0 X10 Y0\nG2 X0 Y10 I-10 J0\n(finish operation: Profile)\n(begin postamble)\nM05\nG17 G54 G90 G80 G40\nM2";
+
+        inGcode.oninput = () => {
+          updateOutput();
+        };
+
+        segmentLength.oninput = () => {
+          updateOutput();
+        };
+
+        segmentAngle.oninput = () => {
+          updateOutput();
+        };
+
+        const isComment = (line) => {
+          //   return false;
+          return line.indexOf("(") == 0;
+        };
+
+        const toString = (command) => {
+          let output = "";
+          for (const [key, value] of Object.entries(command)) {
+            let formattedValue = value;
+            if (formattedValue % 1 !== 0) {
+              formattedValue = formattedValue.toFixed(4);
+            }
+            output += key + formattedValue + " ";
+          }
+          return output;
+        };
+
+        const arcToSegments = (command) => {
+          maxSegmentLen = parseFloat(segmentLength.value);
+          maxSegmentAngle = (parseFloat(segmentAngle.value) / 180) * Math.PI;
+          const isCW = command.G == 2;
+
+          const fromX = posX;
+          const fromY = posY;
+
+          const toX = command.X;
+          const toY = command.Y;
+
+          console.log(fromX, fromY, " to ", toX, toY);
+
+          const rad = Math.sqrt(command.I * command.I + command.J * command.J);
+
+          const cX = fromX + command.I;
+          const cY = fromY + command.J;
+
+          const startAngle = Math.atan2(fromY - cY, fromX - cX);
+          const endAngle = Math.atan2(toY - cY, toX - cX);
+
+          const aX = fromX - cX;
+          const aY = fromY - cY;
+          const bX = toX - cX;
+          const bY = toY - cY;
+          // https://stackoverflow.com/questions/40286650/how-to-get-the-anti-clockwise-angle-between-two-2d-vectors
+          let ccwAngle = Math.atan2(aX * bY - aY * bX, aX * bX + aY * bY);
+          if (ccwAngle < 0) ccwAngle += Math.PI * 2;
+
+          var totalDeltaAngle = ccwAngle;
+          if (isCW) totalDeltaAngle = totalDeltaAngle - Math.PI * 2;
+
+          const bowLen = Math.abs(totalDeltaAngle) * rad;
+          // how many segments needs the bow to be divided into
+          var requiredSegments = Math.ceil(bowLen / maxSegmentLen);
+          var deltaAngle = totalDeltaAngle / requiredSegments;
+
+          var deltaSegmentLen = maxSegmentAngle;
+          if (deltaAngle > maxSegmentAngle) {
+            // angle between to big for set limits, make smaller segments
+            deltaAngle = maxSegmentAngle;
+            deltaSegmentLen = deltaAngle * rad;
+            requiredSegments = Math.ceil(bowLen / deltaSegmentLen);
+          }
+
+          var output = "";
+          if (requiredSegments > 1) {
+            for (let i = 1; i < requiredSegments; i++) {
+              let angle = startAngle + i * deltaAngle;
+
+              let segX = cX + Math.cos(angle) * rad;
+              let segY = cY + Math.sin(angle) * rad;
+              output += toString({ G: 1, X: segX, Y: segY }) + "\n";
+            }
+          }
+
+          return (output += toString({ G: 1, X: toX, Y: toY }));
+        };
+
+        const convertCommand = (command) => {
+          if (command["G"] == 2 || command["G"] == 3)
+            return arcToSegments(command);
+          return toString(command);
+        };
+
+        const registerPosition = (command) => {
+          if (command["X"]) posX = command["X"];
+          if (command["Y"]) posY = command["Y"];
+          if (command["Z"]) posZ = command["Z"];
+        };
+
+        const processLine = (line) => {
+          let matches = [...line.matchAll(/([A-Z])([-+]?\d*\.?\d*)/g)];
+
+          let parsedCommands = [];
+          let parsedCommand = {};
+          for (const match of matches) {
+            if (parsedCommand[match[1]]) {
+              parsedCommands.push(parsedCommand);
+              parsedCommand = {};
+            }
+            parsedCommand[match[1]] = parseFloat(match[2]);
+          }
+
+          if (Object.keys(parsedCommand).length > 0)
+            parsedCommands.push(parsedCommand);
+
+          gcodeOut = "";
+          for (const command of parsedCommands) {
+            gcodeOut += convertCommand(command) + "\n";
+            registerPosition(command);
+          }
+
+          return gcodeOut;
+        };
+
+        const processGcode = (code) => {
+          var outputCode = "";
+          const lines = code.split("\n");
+          let lineNumber = 0;
+
+          for (let line of lines) {
+            // console.log(`=== LINE ${lineNumber} ===`);
+            if (isComment(line)) {
+              console.warn(line);
+              outputCode += line + "\n";
+            } else {
+              //   outputCode += `(${posX} ${posY}) ` + processLine(line);
+              outputCode += processLine(line);
+            }
+            lineNumber++;
+          }
+
+          return outputCode;
+        };
+
+        const updateDownloadButton = () => {
+          const downloadButton = document.querySelector("#download");
+          downloadButton.setAttribute(
+            "href",
+            "data:text/plain;charset=utf-8," +
+              encodeURIComponent(outGcode.value)
+          );
+          downloadButton.setAttribute("download", "arcBreaker.cnc");
+        };
+
+        const updateOutput = () => {
+          const output = processGcode(inGcode.value);
+          outGcode.value = output;
+          updateDownloadButton();
+        };
+
+        updateOutput();
+
+        const setupUpload = () => {
+          const fileSelector = document.querySelector("#inputFile");
+          fileSelector.addEventListener("change", (event) => {
+            const fileList = event.target.files;
+            console.log(fileList);
+            console.log(event.target.result);
+
+            const reader = new FileReader();
+            reader.addEventListener("load", (event) => {
+              inGcode.value = event.target.result;
+              updateOutput();
+            });
+            reader.readAsText(fileList["0"]);
+          });
+        };
+
+        setupUpload();
+      };
+    </script>
+  </body>
+</html>
