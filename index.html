@@ -180,7 +180,9 @@
 
         const isComment = (line) => {
           //   return false;
-          return line.indexOf("(") == 0;
+          if (line.indexOf("(") == 0) return true;
+          if (line.indexOf(";") == 0) return true;
+          return false;
         };
 
         const toString = (command) => {
