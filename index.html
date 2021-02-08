@@ -60,6 +60,13 @@
       transition: opacity 0.3s;
     }
 
+    code {
+      background-color: rgba(255, 0, 0, 0.2);
+      color: red;
+      padding: 1px 2px;
+      border-radius: 2px;
+    }
+
     .tooltip .tooltiptext::after {
       content: "";
       position: absolute;
@@ -79,7 +86,15 @@
   <body>
     <div id="app">
       <h1>Arc Breaker – Convert G2/G3 to G1 move commands</h1>
+      <p>
+        This converter converts GCode arc movements (<code>G2/3</code> with
+        <code>I</code> and <code>J</code>) into straight
+        <code>G1</code> movements. This is only advisable, if your machine
+        doesn't support circular arcs. <code>G2</code> without center point
+        offset <code>I/J</code> but radius <code>R</code> are not supported.
+      </p>
       <div>
+        <label for="inputFile">Upload gcode file</label>
         <input type="file" id="inputFile" accept=".cnc, .g, .gcode" />
         <div class="tooltip">
           <input
@@ -87,7 +102,7 @@
             type="number"
             placeholder="seg-len in mm"
             value="1"
-            min="0.0001"
+            min="0.01"
           />
           <span class="tooltiptext"
             >Max. length of linear segment forming the arc (mm)</span
@@ -100,7 +115,7 @@
             type="number"
             placeholder="angle in degree"
             value="5"
-            min="0.0001"
+            min="0.01"
           />
           <span class="tooltiptext"
             >Max. angle between to linear segments forming the arc
@@ -124,6 +139,13 @@
       ></textarea>
 
       <a id="download">Download output</a>
+      <br />
+      <br />
+      <p>
+        ⚠️ <b>Disclaimer:</b> Use this converter on you own risk, check the
+        output yourself if it makes sense. Any damage that may occur falls into
+        your responsibility.
+      </p>
     </div>
 
     <script>
@@ -173,9 +195,19 @@
           return output;
         };
 
+        const isNumber = function isNumber(value) {
+          return typeof value === "number" && isFinite(value);
+        };
+
         const arcToSegments = (command) => {
+          //https://marlinfw.org/docs/gcode/G002-G003.html
           maxSegmentLen = parseFloat(segmentLength.value);
           maxSegmentAngle = (parseFloat(segmentAngle.value) / 180) * Math.PI;
+
+          if (!isNumber(maxSegmentLen) || maxSegmentLen < 0.0001)
+            maxSegmentLen = 1;
+          if (!isNumber(maxSegmentAngle) || maxSegmentAngle < 0.0001)
+            maxSegmentAngle = 5;
           const isCW = command.G == 2;
 
           const fromX = posX;
@@ -183,8 +215,6 @@
 
           const toX = command.X;
           const toY = command.Y;
-
-          console.log(fromX, fromY, " to ", toX, toY);
 
           const rad = Math.sqrt(command.I * command.I + command.J * command.J);
 
@@ -207,7 +237,21 @@
 
           const bowLen = Math.abs(totalDeltaAngle) * rad;
           // how many segments needs the bow to be divided into
-          var requiredSegments = Math.ceil(bowLen / maxSegmentLen);
+
+          const requiredSegmentsByLengthLimit = Math.ceil(
+            bowLen / maxSegmentLen
+          );
+          const requiredSegmentsByAngleLimit = Math.ceil(
+            Math.abs(totalDeltaAngle) / maxSegmentAngle
+          );
+
+          const requiredSegments = Math.max(
+            requiredSegmentsByLengthLimit,
+            requiredSegmentsByAngleLimit
+          );
+
+          console.log("Replaced arc by", requiredSegments, "segments");
+
           var deltaAngle = totalDeltaAngle / requiredSegments;
 
           var deltaSegmentLen = maxSegmentAngle;
@@ -277,7 +321,7 @@
           for (let line of lines) {
             // console.log(`=== LINE ${lineNumber} ===`);
             if (isComment(line)) {
-              console.warn(line);
+              //   console.warn(line);
               outputCode += line + "\n";
             } else {
               //   outputCode += `(${posX} ${posY}) ` + processLine(line);
@@ -300,9 +344,11 @@
         };
 
         const updateOutput = () => {
+          console.log("=== Update output ===");
           const output = processGcode(inGcode.value);
           outGcode.value = output;
           updateDownloadButton();
+          console.log(" ✅ DONE");
         };
 
         updateOutput();
